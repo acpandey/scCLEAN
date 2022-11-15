@@ -1,6 +1,10 @@
 # scCLEAN
 Single Cell Notebooks for scCLEAN Method Comparison
 
+These notebooks are meant to re-produce the main figures from the paper 
+
+This repository is actively being updated with commented notebooks
+
 # Notebook Descriptions: Single Cell Analysis
 | File  | Description |
 | :-------------: | :-------------: |
