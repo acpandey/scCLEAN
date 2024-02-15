@@ -1,0 +1,1033 @@
+---
+title: "PBMC analysis of 10X Genomics data with scCLEAN"
+output: 
+  github_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+date: '2024-02-09'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r import h5 files generated from Cell Ranger}
+
+#control
+
+control_dirs <- c("~/scclean/scCLEAN/PBMC_exp_files/b2_standard_full_trans_filtered_feature_bc_matrix.h5","~/scclean/scCLEAN/PBMC_exp_files/control_filtered_no_mask.h5","~/scclean/scCLEAN/PBMC_exp_files/c2_standard_full_unmasked_filtered_feature_bc_matrix.h5")
+
+
+#depleted
+
+depleted_dirs <- c("~/scclean/scCLEAN/PBMC_exp_files/b2_depleted_full_trans_filtered_feature_bc_matrix.h5", "~/scclean/scCLEAN/PBMC_exp_files/depleted_filtered_no_mask_rep3.h5","~/scclean/scCLEAN/PBMC_exp_files/c2_depleted_full_unmasked_filtered_feature_bc_matrix.h5")
+
+
+```
+
+
+```{r create Seurat objects for all control samples}
+library(Seurat)
+
+#create a list
+
+list.mtxc <- as.list(control_dirs)
+list.mtxc <- lapply(list.mtxc, FUN = function(x) {
+  x <- Read10X_h5(x)
+})
+
+#convert matrices to seurat objects and filter following genes expressed in 3 cells with cells expressing at least 200 genes
+
+list.mtxc <- lapply(list.mtxc, FUN = function (x) {
+  x <- CreateSeuratObject(x, min.cells=3, project = "10x-v3", min.features = 200)
+})
+
+#change names
+
+names(list.mtxc) = paste0("rep",as.character(seq_along(list.mtxc)))
+
+#add replicates to metadata
+
+list.mtxc <- Map(function(x, rep_name) {
+  x$replicate <- rep_name
+  return(x)
+}, list.mtxc, paste0("rep", seq_along(list.mtxc)))
+
+#merge all matrices for data handling
+
+c.combined <- merge(list.mtxc[[1]], y = c(list.mtxc[-1]), add.cell.ids = names(list.mtxc),project="PBMC_10X")
+
+```
+
+
+```{r create Seurat objects for all scCLEAN samples}
+
+#repeat process for scCLEAN samples
+
+list.mtxd <- as.list(depleted_dirs)
+list.mtxd <- lapply(list.mtxd, FUN = function(x) {
+  x <- Read10X_h5(x)
+})
+
+list.mtxd <- lapply(list.mtxd, FUN = function (x) {
+  x <- CreateSeuratObject(x, min.cells=3, project = "scCLEAN", min.features = 200)
+})
+
+#change names
+
+names(list.mtxd) = paste0("rep",as.character(seq_along(list.mtxd)))
+
+#add replicates to metadata
+
+list.mtxd <- Map(function(x, rep_name) {
+  x$replicate <- rep_name
+  return(x)
+}, list.mtxd, paste0("rep", seq_along(list.mtxd)))
+
+#merge all matrices for data handling
+
+d.combined <- merge(list.mtxd[[1]], y = c(list.mtxd[-1]), add.cell.ids = names(list.mtxd),project="PBMC_10X")
+
+```
+
+
+``` {r visualize sequencing depth}
+library(ggplot2)
+library(ggpubr)
+library(ggExtra)
+library(cowplot)
+library(dplyr)
+
+list.so <- list(tenx = c.combined,
+                cc = d.combined)
+
+p1 <- ggplot(list.so$tenx@meta.data, aes(x=nCount_RNA, y=nFeature_RNA)) + geom_point(aes(color=replicate)) + geom_smooth(method="lm")
+p1 <- ggMarginal(p1, type = "histogram", fill="lightgrey")
+
+p2 <- ggplot(list.so$tenx@meta.data, aes(x=log10(nCount_RNA), y=log10(nFeature_RNA))) + geom_point(aes(color=replicate)) + geom_smooth(method="lm")
+p2 <- ggMarginal(p2, type = "histogram", fill="lightgrey")
+
+plot_grid(plotlist = list(p1,p2), ncol=2, align='h', rel_widths = c(1, 1))
+
+rm(c.combined,d.combined,list.mtxc,list.mtxd)
+```
+
+
+``` {r visualize sequencing depth scCLEAN}
+
+p1 <- ggplot(list.so$cc@meta.data, aes(x=nCount_RNA, y=nFeature_RNA)) + geom_point(aes(color=replicate)) + geom_smooth(method="lm")
+p1 <- ggMarginal(p1, type = "histogram", fill="lightgrey")
+
+p2 <- ggplot(list.so$cc@meta.data, aes(x=log10(nCount_RNA), y=log10(nFeature_RNA))) + geom_point(aes(color=replicate)) + geom_smooth(method="lm")
+p2 <- ggMarginal(p2, type = "histogram", fill="lightgrey")
+
+plot_grid(plotlist = list(p1,p2), ncol=2, align='h', rel_widths = c(1, 1))
+```
+
+
+### Quantify % of reads contributed by mitochondrial, ribosomoal, and all jumpcode gene targets
+
+```{r Percentage of features}
+
+#percent mito
+
+list.so <- lapply(list.so, FUN = function(x) {
+  x <- PercentageFeatureSet(x, pattern = "^MT-", col.name = 'percent.mt')
+})
+
+#percent ribo
+
+list.so <- lapply(list.so, FUN = function(x) {
+  x <- PercentageFeatureSet(x, pattern = "^RP[SL][[:digit:]]|^RPLP[[:digit:]]|^RPSA", col.name = 'percent.rb')
+})
+
+#create regex for target list
+
+targets <- read.delim("~/scclean/scCLEAN/pc_255genes.txt", header = F)
+targets <- targets$V1
+targets_regex <- paste0("^", targets, "$", collapse = "|")
+
+#percent all targets
+list.so <- lapply(list.so, FUN = function(x) {
+  x <- PercentageFeatureSet(x, pattern = targets_regex, col.name = 'percent.all')
+})
+```
+
+
+```{r boxplots for targeted features}
+#here we can visualize the depletion for targeted genes
+
+temp=rbind(
+  list.so[[1]]@meta.data %>% select(percent.mt, percent.rb, percent.all, orig.ident),
+  list.so[[2]]@meta.data %>% select(percent.mt, percent.rb, percent.all, orig.ident)
+  )
+
+ggboxplot(data = temp, x = "orig.ident", y = c("percent.mt","percent.rb","percent.all"), merge = T, palette = "npg")
+```
+
+
+### Dead cell removal
+
+Cells with high fraction of mitochondrial content are typically of lower quality and should be filtered out. Keep in mind the cell type as fraction of mitochondrial reads can vary between cell types. Here We will keep cells within the 99th quantile and remove outlier cells from the distribution.
+
+```{r plot dead cell threshold control}
+#control sample
+p1 <- ggplot(list.so[[1]]@meta.data, aes(x=nFeature_RNA, y=percent.mt)) +
+      geom_point(aes(color=replicate)) +
+      geom_hline(aes(yintercept = quantile(list.so[[1]]$percent.mt, probs = 0.99)), colour = "blue", linetype = 2)
+ggMarginal(p1, type = "histogram", fill="lightgrey", bins=100)
+```
+
+
+If you feel the threshold is too conservative, you can always change using the probs argument to change the cutoff of the distribution
+
+```{r dead cell removal control}
+list.so[[1]]@meta.data <- list.so[[1]]@meta.data %>% mutate(miQC.keep = ifelse(test = list.so[[1]]@meta.data$percent.mt <= quantile(list.so[[1]]$percent.mt, probs = 0.99), yes = 'keep', no = 'discard'))
+
+FeatureScatter(list.so[[1]], feature1 = "nFeature_RNA", feature2 = "percent.mt", group.by = "miQC.keep", jitter = T)
+```
+
+
+```{r dead cell filtering scCLEAN}
+#depleted sample
+p3 <- ggplot(list.so[[2]]@meta.data, aes(x=nFeature_RNA, y=percent.mt)) +
+      geom_point(aes(color=replicate)) +
+      geom_hline(aes(yintercept = quantile(list.so[[2]]$percent.mt, probs = 0.99)), colour = "blue", linetype = 2)
+ggMarginal(p3, type = "histogram", fill="lightgrey", bins=100)
+```
+
+
+```{r filtering dead cells scCLEAN}
+list.so[[2]]@meta.data <- list.so[[2]]@meta.data %>% mutate(miQC.keep = ifelse(test = list.so[[2]]@meta.data$percent.mt <= quantile(list.so[[2]]$percent.mt, probs=0.99), yes = 'keep', no = 'discard'))
+
+FeatureScatter(list.so[[2]], feature1 = "nFeature_RNA", feature2 = "percent.mt", group.by = "miQC.keep", jitter = T)
+```
+
+
+```{r remove dead cells from scCLEAN}
+#filter the cells
+list.so[[1]] <- list.so[[1]][, list.so[[1]]@meta.data[, "miQC.keep"] == 'keep']
+list.so[[2]] <- list.so[[2]][, list.so[[2]]@meta.data[, "miQC.keep"] == 'keep']
+```
+
+
+```{r low sequencing depth cell removal}
+# Gene/UMI scatter plot before filtering for control
+p1 <- ggplot(list.so[[1]]@meta.data, aes(x=log10(nCount_RNA), y=log10(nFeature_RNA))) +
+  geom_point(aes(color=replicate)) +
+  geom_smooth(method="lm") + 
+  geom_hline(aes(yintercept = median(log10(list.so[[1]]$nFeature_RNA)) - 3*mad(log10(list.so[[1]]$nFeature_RNA))), colour = "green", linetype = 2)
+
+ggMarginal(p1, type = "histogram", fill="lightgrey")
+```
+
+
+```{r low sequencing depth cell removal scCLEAN}
+# Gene/UMI scatter plot before filtering for control
+p3 <- ggplot(list.so[[2]]@meta.data, aes(x=log10(nCount_RNA), y=log10(nFeature_RNA))) +
+  geom_point(aes(color=replicate)) +
+  geom_smooth(method="lm") +
+  geom_hline(aes(yintercept = median(log10(list.so[[2]]$nFeature_RNA)) - 3*mad(log10(list.so[[2]]$nFeature_RNA))), colour = "green", linetype = 2)
+
+ggMarginal(p3, type = "histogram", fill="lightgrey")
+```
+
+
+```{r set low-quality threshold for control}
+
+#filter the cells from the control
+
+min.gene.thresh <- median(log10(list.so[[1]]$nFeature_RNA)) - 3*mad(log10(list.so[[1]]$nFeature_RNA))
+
+cells.keep <- rownames(list.so[[1]]@meta.data %>% filter(log10(nFeature_RNA) > min.gene.thresh))
+```
+
+
+```{r filter low-quality cells from control}
+#control
+list.so[[1]] <- subset(list.so[[1]], cells = cells.keep)
+```
+
+
+```{r set low-quality threshold for scCLEAN}
+
+#filter the cells from the depleted
+
+min.gene.thresh.d <- median(log10(list.so[[2]]$nFeature_RNA)) - 3*mad(log10(list.so[[2]]$nFeature_RNA))
+
+cells.keep.d <- rownames(list.so[[2]]@meta.data %>% filter(log10(nFeature_RNA) > min.gene.thresh.d))
+```
+
+
+```{r filter low-quality cells from scCLEAN}
+#depleted
+list.so[[2]] <- subset(list.so[[2]], cells = cells.keep.d)
+```
+
+
+``` {r plotting low complexity cells control}
+#control
+lm.model = lm(data = list.so[[1]]@meta.data, formula = log10(nFeature_RNA) ~ log10(nCount_RNA))
+list.so[[1]]@meta.data$residuals <- residuals(lm.model)
+list.so[[1]]@meta.data <- list.so[[1]]@meta.data %>% mutate(complexity = ifelse(test = list.so[[1]]@meta.data$residuals >= -0.4, yes = "high" , no = "low"))
+
+p2 <- ggplot(list.so[[1]]@meta.data, aes(x=log10(nCount_RNA), y=log10(nFeature_RNA))) + geom_point(aes(color = complexity)) + geom_abline(intercept = lm.model$coefficients[1] - 0.4 , slope = lm.model$coefficients[2], color="orange", linetype=2) + geom_smooth(method="lm")
+ggMarginal(p2, type = "histogram", fill="lightgrey")
+```
+
+``` {r plotting low complexity cells scCLEAN}
+#control
+lm.model = lm(data = list.so[[2]]@meta.data, formula = log10(nFeature_RNA) ~ log10(nCount_RNA))
+list.so[[2]]@meta.data$residuals <- residuals(lm.model)
+list.so[[2]]@meta.data <- list.so[[2]]@meta.data %>% mutate(complexity = ifelse(test = list.so[[2]]@meta.data$residuals >= -0.4, yes = "high" , no = "low"))
+
+p2 <- ggplot(list.so[[2]]@meta.data, aes(x=log10(nCount_RNA), y=log10(nFeature_RNA))) + geom_point(aes(color = complexity)) + geom_abline(intercept = lm.model$coefficients[1] - 0.4 , slope = lm.model$coefficients[2], color="orange", linetype=2) + geom_smooth(method="lm")
+ggMarginal(p2, type = "histogram", fill="lightgrey")
+```
+
+
+```{r filter cells from depleted and view}
+#filter the cells from the depleted
+list.so[[2]] <- list.so[[2]][, list.so$cc@meta.data[, "complexity"] == 'high']
+```
+
+
+```{r scDblFinder}
+library(scDblFinder)
+library(SingleCellExperiment)
+library(BiocParallel)
+library(scran)
+
+#for parallelization on windows machine and doublet reproducibility
+
+bp <- BiocParallel::SerialParam(RNGseed=1234)
+
+sce <- list()
+for (i in names(list.so)) {
+  sce[[i]] <- as.SingleCellExperiment(list.so[[i]], assay = "RNA")
+  
+  message("finished creating sce object...")
+  
+  #sce[[i]]$cluster <- quickCluster(sce[[i]])
+  
+  sce[[i]] <- scDblFinder(sce[[i]], samples = "replicate", BPPARAM = bp) #using the samples argument is important if multiple captures were used
+  
+  message("finished simulating doublets...")
+  
+  #save to original seurat object
+  list.so[[i]]$class <- sce[[i]]$scDblFinder.class
+  list.so[[i]]$class <- factor(list.so[[i]]$class, levels = c("singlet","doublet"))
+  
+  message("finished adding to seurat object...")
+  
+  #remove sce object
+  if (!length(sce) == length(list.so)) {
+    message("processing next sample...")
+  } else {
+      rm(sce)
+  }
+}
+
+```
+
+
+```{r doublet plotting}
+#plot doublets
+for (i in names(list.so)) {
+  
+  p1 <- VlnPlot(list.so[[i]], features = c("nCount_RNA", "nFeature_RNA"), group.by = "class", split.by = "replicate") & xlab(NULL) & ggtitle(i)
+  p2 <- FeatureScatter(list.so[[i]], feature1 = "nCount_RNA", feature2 = "nFeature_RNA", group.by = "class") + ggtitle(i)
+  plot(p1) + plot(p2)
+  
+  #verify counts are roughly twice as much
+  print(list.so[[i]]@meta.data %>% group_by(class) %>% summarise(umi_count = mean(nCount_RNA)))
+}
+```
+
+
+```{r filter singlets}
+# Loop through each element and remove the called doublets
+for (i in names(list.so)) {
+  # Filter the data directly using dplyr's filter function
+  list.so[[i]] <- list.so[[i]][, list.so[[i]]@meta.data[, "class"] == 'singlet']
+}
+```
+
+
+```{r view libraries control}
+
+p3 <- ggplot(list.so[[1]]@meta.data, aes(x=log10(nCount_RNA), y=log10(nFeature_RNA))) + geom_point() + geom_smooth(method="lm")
+ggMarginal(p3, type = "histogram", fill="lightgrey")
+
+```
+
+
+```{r view libraries scCLEAN}
+p3 <- ggplot(list.so[[2]]@meta.data, aes(x=log10(nCount_RNA), y=log10(nFeature_RNA))) + geom_point() + geom_smooth(method="lm")
+ggMarginal(p3, type = "histogram", fill="lightgrey")
+
+```
+
+
+```{r sig feature selection}
+#load the necessary packages
+library(M3Drop)
+library(Matrix)
+
+raw_counts <- list()
+NBDropFS <- list()
+for (i in names(list.so)) {
+  # For memory purposes we are going to split each sample by their sample_id # this will also help us to observe some technical variation between captures
+  
+  raw_counts[[i]] <- SplitObject(list.so[[i]], split.by = "replicate")
+  
+  message("completed splitting object")
+  
+  #retreive counts
+  raw_counts[[i]] <- lapply(raw_counts[[i]], function(j) {
+    j <- GetAssayData(j, slot = "counts", assay = "RNA")
+  })
+  
+  message("completed retrieving counts data")
+  
+  if (i != 'tenx') {
+    raw_counts[[i]] <- lapply(raw_counts[[i]], function(x) {
+      x <- x[!rownames(x) %in% targets, ]
+    })
+  }
+  
+  #convert data and remove undetected genes
+  raw_counts[[i]] <- lapply(raw_counts[[i]], function(n) {
+  n <- NBumiConvertData(n, is.counts = TRUE)
+  })
+  
+  message("completed removing undetected genes")
+  
+  #fit to the negative binomial model for UMI counts data
+  raw_counts[[i]] <- lapply(raw_counts[[i]], function(p) {
+  p <- NBumiFitModel(as.matrix(p))
+  })
+  
+  message("completed fitting to NB model")
+  
+  #feature selection
+  NBDropFS[[i]] <- lapply(raw_counts[[i]], function(x) {
+  x <- NBumiFeatureSelectionCombinedDrop(x, method="fdr", qval.thres=0.01, suppress.plot=T) # the q.val threshold can be changed as needed
+  })
+  
+  message("finished selecting features")
+}
+```
+
+
+```{r}
+#the raw counts object can now be removed
+rm(raw_counts)
+```
+
+
+```{r intersect all sig features}
+#find common features between all replicates
+dropout_genes <- list()
+features_selected <- list()
+for (i in names(NBDropFS)) {
+  for (p in names(NBDropFS[[i]])) {
+    dropout_genes[[i]][[p]] <- NBDropFS[[i]][[p]]$Gene
+  }
+  features_selected[[i]] <- Reduce(intersect, dropout_genes[[i]])
+}
+
+#remove any targeted genes that may have shown up in feature selection
+features_selected[[2]] <- setdiff(features_selected[[2]], targets)
+```
+
+
+```{r model against NB dropouts}
+#plot the dropout genes
+dropout_df <- list()
+for (i in names(list.so)) {
+  counts <- list.so[[i]]@assays$RNA@counts
+  counts <- counts[rowSums(counts) > 0, ]
+  dropout_df[[i]] <- data.frame(dropout_rate = 1 - (rowSums(counts > 0) / ncol(counts)),
+                                mean_exp = rowMeans(counts),
+                                features_selected = ifelse(rownames(counts) %in% features_selected[[i]], yes = TRUE, no = FALSE))
+  p <- ggplot(dropout_df[[i]], aes(x = mean_exp, y = dropout_rate, color = features_selected)) +
+    geom_point() +
+    scale_x_log10() +
+    scale_color_manual(values = c("#999999", "#E69F00")) +
+    ggtitle(i)
+  plot(p)
+}
+```
+
+
+```{r SCTransform}
+#SCTransform
+for (i in names(list.so)) {
+  list.so[[i]] <- SCTransform(list.so[[i]], verbose = F, residual.features = features_selected[[i]])
+  message("finished sctransform...")
+}
+```
+
+
+```{r cell cycles}
+#cell cyclce scoring
+list.so <- lapply(X = list.so, FUN = function(x) {
+  x <- CellCycleScoring(x, s.features = cc.genes.updated.2019$s.genes, g2m.features = cc.genes.updated.2019$g2m.genes)
+})
+
+for (i in names(list.so)) {
+  list.so[[i]]$cc.difference <- list.so[[i]]$S.Score - list.so[[i]]$G2M.Score
+}
+```
+
+
+```{r PCA}
+#PCA
+list.so <- lapply(X = list.so, FUN = function(x) {
+  x <- RunPCA(x, assay = "SCT")
+})
+```
+
+
+```{r harmony batch correction}
+library(harmony)
+#run harmony
+list.so <- lapply(list.so, function(x) {
+  x <- RunHarmony(x, group.by.vars = "replicate", reduction="pca", project.dim = FALSE, reduction.save="harmony")
+})
+```
+
+
+```{r UMAP}
+#generate UMAP coordinates
+list.so <- lapply(X = list.so, FUN = function(x) {
+  x <- RunUMAP(x, dims = 1:50, reduction='harmony')
+})
+```
+
+
+```{r Find neighbors}
+#find neighbors
+list.so <- lapply(X = list.so, FUN = function(x) {
+  x <- FindNeighbors(x, reduction = "harmony", k.param=20, dims = 1:50)
+})
+```
+
+
+```{r Find clusters}
+#find clusters
+list.so <- lapply(X = list.so, FUN = function(x) {
+  x <- FindClusters(x, resolution = 1.2, algorithm = 2, verbose = TRUE)
+})
+```
+
+
+```{r examine technical variation}
+#Dimplots
+for (i in names(list.so)) {
+  Idents(list.so[[i]]) <- "SCT_snn_res.1.2"
+  #look for technical variation
+  dim <- DimPlot(list.so[[i]], reduction = "umap", group.by = "replicate", label = F) +
+    ggtitle(i)
+  plot(dim)
+  
+  dim2 <- DimPlot(list.so[[i]], reduction = "umap", label = T) + NoLegend() + ggtitle(i)
+  plot(dim2)
+}
+```
+
+
+```{r save}
+PBMC_reps <- saveRDS(list.so, file = "~/scclean/scCLEAN/PBMC_reps.RDS")
+```
+
+
+```{r import Azimuth reference}
+library(SeuratDisk)
+reference <- LoadH5Seurat(file = "~/scclean/scCLEAN/pbmc_multimodal.h5seurat", assays="counts")
+```
+
+
+```{r import scmap}
+library(scmap)
+#normalize counts of the reference
+reference <- NormalizeData(reference, assay = "SCT")
+#make an sce object
+sce_reference <- as.SingleCellExperiment(reference, assay = "SCT")
+```
+
+
+```{r indexing for control}
+
+scmap_features <- intersect(VariableFeatures(so[[1]]),VariableFeatures(reference))
+scmap_features_regex <- paste0("^", scmap_features, "$", collapse = "|")
+rowData(sce_reference)$scmap_features <- stringr::str_detect(string = rownames(sce_reference), pattern = scmap_features_regex)
+rowData(sce_reference)$feature_symbol <- rownames(sce_reference)
+#index by cluster using scmap
+sce_reference <- indexCluster(sce_reference, cluster_col = "celltype.l2")
+```
+
+
+```{r convert to single cell experiment}
+#now let's make an sce object of the control dataset, only need to do once
+control_sce <- as.SingleCellExperiment(x = list.so[[1]], assay = "RNA")
+rowData(control_sce)$feature_symbol <- rownames(control_sce)
+```
+
+
+```{r project for control}
+#project the control data onto the reference, can repeat as necessary
+scmapcluster_results <- scmapCluster(projection = control_sce, index_list = list(metadata(sce_reference)$scmap_cluster_index), threshold = 0.5)
+```
+
+
+```{r classifications}
+library(RColorBrewer)
+#get the celltype information
+cell_types <- list.so[[1]]@meta.data %>% mutate(scmap_clusters = scmapcluster_results$scmap_cluster_labs[,]) %>% dplyr::select(SCT_snn_res.1.2, scmap_clusters)
+
+#this will give us the final cluster information based on the max proportion to cell type of reference 
+new <- cell_types %>% group_by(SCT_snn_res.1.2) %>% dplyr::count(scmap_clusters)
+new <- new %>% reframe(proportios_n = proportions(n)*100, clusters = scmap_clusters)
+new <- new %>% group_by(SCT_snn_res.1.2) %>% filter(proportios_n == max(proportios_n, na.rm = T))
+print(new)
+```
+
+
+```{r visualize annotations}
+colourCount = length(unique(cell_types$scmap_clusters))
+
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(colourCount)
+
+ggplot(data = cell_types, aes(x=SCT_snn_res.1.2, y = after_stat(count)/sum(after_stat(count)))) + geom_bar(aes(fill=scmap_clusters), position = "fill") + scale_y_continuous(labels = scales::percent) + scale_fill_manual(values = mycolors)
+
+list.so[[1]]$scmap_clusters <- cell_types$scmap_clusters
+```
+
+
+```{r repeat for scCLEAN}
+scmap_features2 <- intersect(VariableFeatures(list.so[[2]]),VariableFeatures(reference))[1:500]
+scmap_features2_regex <- paste0("^", scmap_features2, "$", collapse = "|")
+rowData(sce_reference)$scmap_features <- stringr::str_detect(string = rownames(sce_reference), pattern = scmap_features2_regex)
+rowData(sce_reference)$feature_symbol <- rownames(sce_reference)
+#index by cluster using scmap
+sce_reference <- indexCluster(sce_reference, cluster_col = "celltype.l2")
+```
+
+
+```{r convert to SCE for scCLEAN}
+#now let's make an sce object of the control dataset
+depleted_sce <- as.SingleCellExperiment(x = list.so[[2]], assay = "RNA")
+rowData(depleted_sce)$feature_symbol <- rownames(depleted_sce)
+```
+
+
+```{r project scCLEAN}
+#project the control data onto the reference
+scmapcluster_results.jc <- scmapCluster(projection = depleted_sce, index_list = list(metadata(sce_reference)$scmap_cluster_index), threshold = 0.5)
+```
+
+
+```{r visualize projection}
+library(RColorBrewer)
+#get the celltype information
+cell_types <- list.so[[2]]@meta.data %>% mutate(scmap_clusters = scmapcluster_results.jc$scmap_cluster_labs[,]) %>% dplyr::select(SCT_snn_res.1.2, scmap_clusters)
+
+#this will give us the final cluster information based on the max proportion to cell type of reference 
+new.cc <- cell_types %>% group_by(SCT_snn_res.1.2) %>% dplyr::count(scmap_clusters)
+new.cc <- new.cc %>% reframe(proportios_n = proportions(n)*100, clusters = scmap_clusters)
+new.cc <- new.cc %>% group_by(SCT_snn_res.1.2) %>% filter(proportios_n == max(proportios_n, na.rm = T))
+print(new.cc)
+```
+
+
+```{r add to seurat object}
+colourCount = length(unique(cell_types$scmap_clusters))
+
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(colourCount)
+
+ggplot(data = cell_types, aes(x=SCT_snn_res.1.2, y = after_stat(count)/sum(after_stat(count)))) + geom_bar(aes(fill=scmap_clusters), position = "fill") + scale_y_continuous(labels = scales::percent) + scale_fill_manual(values = mycolors)
+
+list.so[[2]]$scmap_clusters <- cell_types$scmap_clusters
+```
+
+
+```{r sub clustering given 50/50 split}
+Idents(list.so[[2]]) <- "SCT_snn_res.1.2"
+list.so[[2]] <- FindSubCluster(list.so[[2]], cluster = "12", resolution = 0.1, algorithm = 2, graph.name = "SCT_snn")
+Idents(list.so[[2]]) <- "sub.cluster"
+list.so[[2]] <- FindSubCluster(list.so[[2]], cluster = "28", resolution = 0.1, algorithm = 2, graph.name = "SCT_snn")
+DimPlot(list.so[[2]], label = T, pt.size = 0.75, group.by = "sub.cluster") + theme_classic() + ggtitle('JC')
+```
+
+
+```{r repeat projection}
+#now let's make an sce object of the depleted dataset
+depleted_sce <- as.SingleCellExperiment(x = list.so[[2]], assay = "RNA")
+rowData(depleted_sce)$feature_symbol <- rownames(depleted_sce)
+#project the control data onto the reference
+scmapcluster_results.jc <- scmapCluster(projection = depleted_sce, index_list = list(metadata(sce_reference)$scmap_cluster_index), threshold = 0.5)
+```
+
+
+
+```{r convert idents for control}
+
+Idents(list.so[[1]]) <- "SCT_snn_res.1.2"
+list.so[[1]] <- RenameIdents(object = list.so[[1]], 
+                            "0" = "NK",
+                            "1" = "CD4 TCM",
+                            "2" = "CD4 Naive",
+                            "3" = "CD14 Mono",
+                            "4" = "CD14 Mono",
+                            "5" = "CD4 Naive",
+                            "6" = "CD14 Mono",
+                            "7" = "CD4 TEM",
+                            "8" = "CD16 Mono",
+                            "9" = "MAIT",
+                            "10" = "CD8 Naive",
+                            "11" = "CD4 TCM",
+                            "12" = "B naive",
+                            "13" = "CD8 TEM",
+                            "14" = "CD4 TCM",
+                            "15" = "CD4 Naive",
+                            "16" = "cDC2",
+                            "17" = "B memory",
+                            "18" = "B naive",
+                            "19" = "NK",
+                            "20" = "B memory",
+                            "21" = "NK",
+                            "22" = "pDC",
+                            "23" = "NK_CD56bright",
+                            "24" = "Platelet",
+                            "25" = "CD14 Mono",
+                            "26" = "CD4 Naive",
+                            "27" = "NK",
+                            "28" = "HSPC",
+                            "29" = "Plasmablast",
+                            "30" = "NK",
+                            "31" = "MAIT",
+                            "32" = "NK Proliferating",
+                            "33" = "CD14 Mono")
+list.so[[1]]$new.idents <- Idents(list.so[[1]])
+DimPlot(list.so[[1]], reduction = "UMAP", label = TRUE, group.by = "SCT_snn_res.1.2") + NoLegend()
+DimPlot(list.so[[1]], reduction = "UMAP", label = TRUE) + NoLegend()
+```
+
+
+```{r convert idents for scCLEAN}
+
+Idents(list.so[[2]]) <- "sub.cluster"
+list.so[[2]] <- RenameIdents(object = list.so[[2]], 
+                            "0" = "NK",
+                            "1" = "CD4 TCM",
+                            "2" = "CD4 Naive",
+                            "3" = "CD14 Mono",
+                            "4" = "CD4 Naive",
+                            "5" = "CD14 Mono",
+                            "6" = "CD14 Mono",
+                            "7" = "CD4 TCM",
+                            "8" = "CD8 TEM",
+                            "9" = "MAIT",
+                            "10" = "CD16 Mono",
+                            "11" = "CD8 Naive",
+                            "12_0" = "B memory",
+                            "12_1" = "B intermediate",
+                            "12_2" = "B intermediate",
+                            "13" = "B naive",
+                            "14" = "dnT",
+                            "15" = "CD4 TCM",
+                            "16" = "CD4 TCM",
+                            "17" = "B naive",
+                            "18" = "NK",
+                            "19" = "NK_CD56bright",
+                            "20" = "cDC2",
+                            "21" = "NK",
+                            "22" = "NK",
+                            "23" = "CD4 CTL",
+                            "24" = "Eryth",
+                            "25" = "pDC",
+                            "26" = "CD14 Mono",
+                            "27" = "Platelet",
+                            "28_0" = "CD4 Proliferating",
+                            "28_1" = "Plasmablast",
+                            "29" = "HSPC",
+                            "30" = "CD4 TCM",
+                            "31" = "NK Proliferating",
+                            "32" = "pDC",
+                            "33" = "cDC1")
+list.so[[2]]$new.idents <- Idents(list.so[[2]])
+DimPlot(list.so[[2]], reduction = "umap", label = TRUE, group.by = "SCT_snn_res.1.2") + NoLegend()
+DimPlot(list.so[[2]], reduction = "umap", label = TRUE, repel = T) + NoLegend()
+```
+
+
+```{r ROC classification stats}
+library(caret)
+library(pROC)
+not_found <- setdiff(names(table(list.so[[1]]$scmap_clusters)),names(table(list.so[[1]]$new.idents)))
+not_found <- c(not_found[2:4],not_found[7:8],not_found[10],not_found[5:6],not_found[1],not_found[11:14],not_found[9])
+list.so[[1]]$cm <- factor(list.so[[1]]$new.idents, levels = c(levels(list.so[[1]]$new.idents),not_found))
+list.so[[1]]$scmap_clusters <- factor(list.so[[1]]$scmap_clusters, levels = levels(list.so[[1]]$cm))
+tab1 <- table(Predicted = list.so[[1]]$cm, Actual = list.so[[1]]$scmap_clusters)
+cm_1 <- confusionMatrix(tab1)
+cm_1$table <- data.frame(as.matrix(cm_1$table) / rowSums(as.matrix(cm_1$table))*100)
+
+p1 <- ggplot(data = cm_1$table, aes(x = Actual, y = Predicted)) + geom_tile(aes(fill=Freq), colour="white") + scale_fill_gradient(low = "lightblue", high = "red", na.value = "transparent", labels=c("min","max"), breaks=c(0,100), name = NULL) + geom_text(aes(x = Actual, y = Predicted, label = round(Freq)), size=2) + theme(legend.position = "right", axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), legend.text = element_text(face = "bold"), axis.title = element_text(size = 12), ) + labs(x="Reference Labels",y="Unsupervised Clustering", title = "10x-v3 Accuracy: 0.833") + NoLegend()
+```
+
+
+```{r ROC plotting}
+list.so[[1]]$scmap_clusters <- cell_types$scmap_clusters
+list.so[[1]]$roc <- ifelse(list.so[[1]]$scmap_clusters == list.so[[1]]$new.idents, 1, 0)
+list.so[[1]]$probs <- as.numeric(scmapcluster_results$scmap_cluster_siml)
+list.so[[1]]$probs[is.na(list.so[[1]]$probs)] <- 0
+plot(x = list.so[[1]]$probs, y = list.so[[1]]$roc)
+glm.fit <- glm(list.so[[1]]$roc ~ list.so[[1]]$probs, family = binomial)
+lines(list.so[[1]]$probs, glm.fit$fitted.values)
+par(pty = "s")
+roc1 <- roc(list.so[[1]]$roc, glm.fit$fitted.values, col="blue", lwd=4, print.auc=TRUE, asp=NA, percent=TRUE, plot=TRUE, xlab="False Positive Percentage", ylab="True Positive Percentage", legacy.axes=TRUE)
+```
+
+```{r ROC classification scCLEAN}
+library(caret)
+library(pROC)
+not_found <- setdiff(names(table(list.so[[2]]$scmap_clusters)),names(table(list.so[[2]]$new.idents)))
+list.so[[2]]$cm <- factor(list.so[[2]]$new.idents, levels = c(levels(list.so[[2]]$new.idents),not_found))
+list.so[[2]]$cm <- factor(list.so[[2]]$cm, levels = levels(list.so[[1]]$cm))
+list.so[[2]]$scmap_clusters <- factor(list.so[[2]]$scmap_clusters, levels = levels(list.so[[2]]$cm))
+list.so[[2]]$scmap_clusters <- factor(list.so[[2]]$scmap_clusters, levels = levels(list.so[[1]]$scmap_clusters))
+tab1 <- table(Predicted = list.so[[2]]$cm, Actual = list.so[[2]]$scmap_clusters)
+cm <- confusionMatrix(tab1)
+cm$table <- data.frame(as.matrix(cm$table) / rowSums(as.matrix(cm$table))*100)
+
+p2 <- ggplot(data = cm$table, aes(x = Actual, y = Predicted)) + geom_tile(aes(fill=Freq), colour="white") + scale_fill_gradient(low = "lightblue", high = "red", na.value = "transparent", labels=c("min %","max %"), breaks=c(0,98), name = NULL) + geom_text(aes(x = Actual, y = Predicted, label = round(Freq)), size=2) + theme(legend.position = "right", axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), legend.text = element_text(face = "bold"), axis.title = element_text(size = 12), ) + labs(x="Reference Labels",y="Unsupervised Clustering Labels", title = "scCLEAN Accuracy: 0.841")
+
+p1+p2+theme(axis.text.y = element_blank(), axis.ticks.y = element_blank()) + ylab(NULL)
+```
+
+
+```{r ROC plotting scCLEAN}
+list.so[[2]]$scmap_clusters <- cell_types2$scmap_clusters
+list.so[[2]]$roc <- ifelse(list.so[[2]]$scmap_clusters == list.so[[2]]$new.idents, 1, 0)
+list.so[[2]]$probs <- as.numeric(scmapcluster_results.jc$scmap_cluster_siml)
+list.so[[2]]$probs[is.na(list.so[[2]]$probs)] <- 0
+plot(x = list.so[[2]]$probs, y = list.so[[2]]$roc)
+glm.fit <- glm(list.so[[2]]$roc ~ list.so[[2]]$probs, family = binomial)
+lines(list.so[[2]]$probs, glm.fit$fitted.values)
+par(pty = "s")
+roc2 <- roc(list.so[[2]]$roc, glm.fit$fitted.values, col="blue", lwd=4, print.auc=TRUE, asp=NA, percent=TRUE, plot=TRUE, xlab="False Positive Percentage", ylab="True Positive Percentage", legacy.axes=F)
+```
+
+
+```{r Evaulating signifcance between ROC}
+roc_list <- list(roc1,roc2)
+roc_values <- 
+  lapply(roc_list,"[[","auc") %>% 
+  as.numeric() %>% 
+  round(2)
+
+ggroc(data = roc_list, size=1.5)+
+  geom_abline(slope=1, 
+              intercept = 100, 
+              linetype = "dashed", 
+              alpha=0.5,
+              size=1.5,
+              color = "grey") + theme_minimal() + 
+  scale_color_manual(values = c("#28464B", "#931621"),
+                     labels=c(
+                       paste0("10x-v3 AUC: ", roc_values[1]),
+                       paste0("scCLEAN AUC: ", roc_values[2])))+
+  guides(color= guide_legend(title = "Delong's Test p-value < 2.2e-16")) + labs(x="% Specificity", y="% Sensitivity", title = "Reference Mapping Classification ROC") +
+  theme(legend.text = element_text(size = 10), legend.title = element_text(size = 12), axis.title.x = element_text(size = 14, face = "bold"), axis.title.y = element_text(size = 14, face = "bold"), axis.text.x = element_text(size = 10), axis.text.y = element_text(size = 10), legend.position = "bottom", title = element_text(size = 14))
+```
+
+
+
+```{r import in-silico}
+
+in_silico.control <- Read10X_h5(filename = "~/scclean/scCLEAN/PBMC_exp_files/in_silico_pbmc_control.h5")
+in_silico.control <- CreateSeuratObject(in_silico.control, project = "10x-v3", min.cells = 5, min.features = 200)
+
+in_silico.depleted <- Read10X_h5(filename = "~/scclean/scCLEAN/PBMC_exp_files/in_silico_pbmc_depleted.h5")
+in_silico.depleted <- CreateSeuratObject(in_silico.depleted, project = "scCLEAN", min.cells = 5, min.features = 200)
+
+```
+
+
+```{r import DESEQ2}
+library(DESeq2)
+
+list.so[[1]]$deseq2 <- paste0(list.so[[1]]$orig.ident,"_",list.so[[1]]$replicate)
+list.so[[2]]$deseq2 <- paste0(list.so[[2]]$orig.ident,"_",list.so[[2]]$replicate)
+
+st.agg <- AggregateExpression(list.so[[1]], group.by = 'deseq2', slot = 'counts', return.seurat = F, assays = 'RNA')
+agg.is.control <- Seurat:::PseudobulkExpression(object = in_silico.control, pb.method = 'aggregate', slot = 'counts', add.ident = "orig.ident")
+intersect_genes <- intersect(rownames(st.agg$RNA),rownames(in_silico.control$RNA))
+
+st.agg$RNA <- st.agg$RNA[rownames(st.agg$RNA) %in% intersect_genes, ]
+st.agg$RNA <- st.agg$RNA[order(rownames(st.agg$RNA)), ]
+st.agg$RNA
+
+agg.is.control$RNA <- agg.is.control$RNA[rownames(agg.is.control$RNA) %in% intersect_genes, ]
+agg.is.control$RNA <- agg.is.control$RNA[order(names(agg.is.control$RNA))]
+agg.is.control$RNA
+
+temp <- cbind(st.agg$RNA, agg.is.control$RNA)
+colnames(temp)[4] <- "10x-v3_in_silico"
+
+dp.agg <- AggregateExpression(list.so[[2]], group.by = 'deseq2', slot = 'counts', return.seurat = F, assays = 'RNA')
+agg.is.depleted <- Seurat:::PseudobulkExpression(object = in_silico.depleted, pb.method = 'aggregate', slot = 'counts', add.ident = "orig.ident")
+intersect_genes <- intersect(rownames(dp.agg$RNA),rownames(in_silico.depleted$RNA))
+
+dp.agg$RNA <- dp.agg$RNA[rownames(dp.agg$RNA) %in% intersect_genes, ]
+dp.agg$RNA <- dp.agg$RNA[order(rownames(dp.agg$RNA)), ]
+dp.agg$RNA
+
+agg.is.depleted$RNA <- agg.is.depleted$RNA[rownames(agg.is.depleted$RNA) %in% intersect_genes, ]
+agg.is.depleted$RNA <- agg.is.depleted$RNA[order(names(agg.is.depleted$RNA))]
+agg.is.depleted$RNA
+
+
+temp2 <- cbind(dp.agg$RNA, agg.is.depleted$RNA)
+colnames(temp2)[4] <- "scCLEAN_in_silico"
+temp2
+
+intersect_genes <- intersect(rownames(temp),rownames(temp2))
+
+temp <- temp[rownames(temp) %in% intersect_genes, ]
+temp2 <- temp2[rownames(temp2) %in% intersect_genes, ]
+temp <- temp[order(rownames(temp)), ]
+temp2 <- temp2[order(rownames(temp2)), ]
+
+counts <- cbind(temp, temp2)
+counts <- counts[, c(4,1,2,3,8,5,6,7)]
+
+pc_255genes <- read.delim("~/R/pc_255genes.txt", header = F)
+pc_255genes <- pc_255genes$V1
+
+counts <- round(counts[!rownames(counts) %in% pc_255genes, ])
+condition <- gsub("_.*", replacement = "", x = colnames(counts))
+replicate <- factor( c( rep("silico",1) ,rep("experimental",3)))
+
+coldata <- data.frame(samples = colnames(counts),
+                      condition = condition,
+                      replicate = replicate,
+                      row.names = "samples")
+
+coldata$condition <- as.factor(coldata$condition)
+levels(coldata$condition)
+coldata$replicate <- as.factor(coldata$replicate)
+coldata$replicate <- relevel(coldata$replicate, "silico")
+levels(coldata$replicate)
+
+dds <- DESeqDataSetFromMatrix(countData = counts, 
+                              colData = coldata, 
+                              design = ~replicate + condition + replicate:condition)
+
+control_size_factors <- pooledSizeFactors(counts[,2:4])
+depleted_size_factors <- pooledSizeFactors(counts[,6:8])
+sizeFactors(dds) <- c(1,control_size_factors,1,depleted_size_factors)
+dds <- DESeq(dds, test = 'LRT', reduced = ~replicate + condition)
+
+resultsNames(dds)
+res <- results(dds, name = "replicateexperimental.conditionscCLEAN")
+plotMA(res, ylim=c(-2,2))
+res <- res[order(res$padj),]
+res.df <- as.data.frame(res)
+
+resLFC <- lfcShrink(dds, type = "apeglm", coef = "replicateexperimental.conditionscCLEAN")
+resLFC <- resLFC[order(resLFC$padj),]
+reslfc.df <- as.data.frame(resLFC)
+reslfc.df$gene <- rownames(reslfc.df)
+plotMA(resLFC, ylim=c(-2,2))
+
+reslfc.df$category <- ifelse(round(reslfc.df$log2FoldChange, 1) <= -1 & reslfc.df$padj < 0.05, yes = "Experimental off-target", no = NA)
+reslfc.df$category <- ifelse(reslfc.df$log2FoldChange > 1 & reslfc.df$padj < 0.05, yes = "In-silico artifact", no = reslfc.df$category)
+reslfc.df$category[is.na(reslfc.df$category)] <- "not significant"
+off.targets <- reslfc.df %>% filter(category == "Experimental off-target") %>% rownames()
+
+ggplot(reslfc.df, aes(x = baseMean, y=log2FoldChange)) + scale_x_log10() + geom_point(size=0.2, aes(color=factor(category))) + scale_color_manual(name="Gene Enrichment: p-adj <0.05", values = c("Experimental off-target" = "red", "In-silico artifact" = "blue")) + theme_half_open() + ylab("Log2 Effect Size") + xlab("Mean of Normalized Counts")
+
+```
+
+
+```{r visualize each sample on a single UMAP}
+ggplot(harmonized_so@meta.data, aes(x = log10(nCount_RNA), y = log10(nFeature_RNA))) + geom_point(aes(color=orig.ident)) + theme_half_open() + geom_smooth(method="lm") + scale_color_manual(values = c("#00AFBB", "#E7B800")) + theme(legend.title = element_blank(), axis.title.x = element_text(face = "bold"), axis.title.y = element_text(face = "bold")) + labs(x="log10 UMIs/cell", y="log10 Genes/cell") + ylim(1.8,3.5)
+
+```
+
+
+```{r final harmony integration}
+DefaultAssay(list.so[[1]]) <- "SCT"
+DefaultAssay(list.so[[2]]) <- "SCT"
+
+features <- SelectIntegrationFeatures(object.list = list.so)
+
+#merge seurat
+merged_so <- merge(x = list.so[[1]], y = list.so[[2]], merge.data=TRUE)
+
+DefaultAssay(merged_so) <- "SCT"
+
+#manually set variable features
+VariableFeatures(merged_so) <- features
+
+#Run PCA
+merged_so <- RunPCA(merged_so)
+
+#run harmony
+harmonized_so <- RunHarmony(merged_so, group.by.vars = c("orig.ident","replicate"), reduction.save="harmony", reduction="pca")
+harmonized_so <- RunUMAP(harmonized_so, dims=1:50, reduction = "harmony", n.neighbors=30)
+
+rm(merged_so)
+```
+
+
+```{r plotting adjustments}
+polychrome <- DiscretePalette(n = 26, palette = "polychrome")
+
+DimPlot(harmonized_so, label = T, reduction = "umap", split.by = "orig.ident", label.size = 3, pt.size = 0.01, repel = T, cols = polychrome) & ggtitle(NULL) & NoLegend() & theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(), axis.title.x = element_text(hjust = 0,1), axis.text.y = element_blank(), axis.ticks.y = element_blank(), axis.title.y = element_text(hjust = 0,0), axis.line.y = element_line(linetype = 0),axis.line.x = element_line(linetype = 0))
+
+
+DimPlot(harmonized_so, label = T, reduction = "umap", split.by = "replicate", label.size = 3, pt.size = 0.75, repel = T) & NoLegend() & ggtitle(NULL)
+
+```
+
+
+```{r visualize new cell types found}
+cdc1 <- harmonized_so@meta.data %>% filter(new.idents == "cDC1") %>% rownames()
+cd4_pro <- harmonized_so@meta.data %>% filter(new.idents == "CD4 Proliferating") %>% rownames()
+b_int <- harmonized_so@meta.data %>% filter(new.idents == "B intermediate") %>% rownames()
+eryth <- harmonized_so@meta.data %>% filter(new.idents == "Eryth") %>% rownames()
+cd4_ctl <- harmonized_so@meta.data %>% filter(new.idents == "CD4 CTL") %>% rownames()
+
+temp <- subset(harmonized_so, cells = rownames(harmonized_so@meta.data %>% filter(orig.ident == "scCLEAN")))
+temp_plot <- DimPlot(temp, reduction = "umap", cells.highlight = list(cdc1,cd4_pro,b_int,eryth,cd4_ctl), cols.highlight = c(polychrome[6],polychrome[16],polychrome[1],polychrome[8],polychrome[13]), label.size = 3, sizes.highlight = 0.5) + theme_void() + NoLegend() + labs(title = " Newly Resolved Cell Types") + theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+LabelClusters(plot = temp_plot, clusters =c("B intermediate","CD4 Proliferating","cDC1", "Eryth", "CD4 CTL"), id = "ident", repel = T)
+
+
+```
+
+
+```{r sankey diagram for read reallocation}
+sankey <- data.frame(tenx = c(rep("Informative Transcriptome",22),rep("Targeted Intervals",54),rep("Genomic",24)), scCLEAN = c(rep("Informative Transcriptome",22),rep("Informative Transcriptome",25),rep("Targeted Intervals",8),rep("Genomic",45)))
+colnames(sankey) <- c("10x-v3","scCLEAN")
+sankey <- sankey %>% make_long("10x-v3",scCLEAN)
+sankey$node <- factor(sankey$node, levels = c("Genomic","Targeted Intervals","Informative Transcriptome"))
+sankey$next_node <- factor(sankey$next_node, levels = c("Genomic","Targeted Intervals","Informative Transcriptome"))
+ggplot(sankey, aes(x = x, next_x = next_x, node = node, next_node = next_node, fill = factor(node))) +
+    geom_alluvial(flow.alpha = .6, space = 5) +
+    scale_fill_viridis_d(option = "H") +
+    theme_alluvial(base_size = 14) +
+    labs(x = NULL) + theme(axis.text.y = element_blank(), axis.ticks.y = element_blank(), legend.title = element_blank(), legend.position = "top", axis.text.x = element_text(face = "bold", size = 14, colour = "black")) + ylab("% Aligned Reads")
+
+```
+
+
+```{r save final file}
+PBMC_reps <- saveRDS(list.so, file = "~/scclean/scCLEAN/PBMC_reps.RDS")
+```
+
