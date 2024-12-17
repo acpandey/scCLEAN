@@ -20,13 +20,17 @@ All data can be found at Gene Expression Omnibus - GSE283554
 ## Key Features
 
 - **Increased Sensitivity and Complexity:**  
-  Depletes a small subset of abundant, non-informative sequences, redistributing ~50% of reads toward rarer, more informative transcripts.
+  Depletes a small subset of abundant, non-informative sequences, redistributing ~50% of reads toward rarer, more informative transcripts. 
+  
 - **Compatible with Standard scRNA-seq Libraries:**  
   Integrates with commonly used 10x Genomics 3' scRNA-seq workflows without specialized instrumentation.
+
 - **Versatility:**  
   Demonstrated across multiple cell types, tissues, and library preparation methods (including Illumina short-read and PacBio MAS-Seq long-read libraries).
+
 - **Broad Applicability:**  
   Offers a foundational set of guide RNAs for use in standard assays, with instructions for customizing guide selection for user-specific datasets.
+
 - **Performance boost not equivalent to deeper sequencing:**
   Gain in sensitivity cannot be re-capitulated by sequencing deeper. By altering the library composition, more biological variance is incorporated into the latent space during computational dimensionality reduction. This isn't recapitulated by simply sequencing more. 
 
