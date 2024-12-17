@@ -37,7 +37,7 @@ All data can be found at Gene Expression Omnibus - GSE283554
   User performed single cell RNA-seq on a biological condition and doesn't see clear differences between the control and experimental samples.
 
 - **Increased Distinction of Cell Types:** 
-  User is expecting a certain cell type within their dataset and it cannot be identified. 
+  User is expecting a certain cell type within their dataset but it currently cannot be identified. 
 
 - **Identifying Polygenic Signatures:** 
   User is looking to identify biological signatures that are polygenic in nature, or looking to build complex gene regulatory networks. 
@@ -49,29 +49,37 @@ All data can be found at Gene Expression Omnibus - GSE283554
   User is looking to identify single gene signatures or single genes as cell specific markers. 255 genes are removed with scCLEAN. While these 255 genes show low variability across tissues and cell types, it does not mean that they don't contain some biological relavance in the user's samples. Please review the list of genes removed (Guides/scCLEAN_255_removed_genes.csv) before applying scCLEAN. 
 
 
-## Applicability 
+## Applicability
 
-- **Incorporation:** 
-  scCLEAN is a molecular approach applied after or during the generation of the sequencing libraries. This means that it can easily be incorporated into a wide variety of single cell technologies. That being said, the guides were designed for libraries generated through the 10X single cell platform. 
+- **Incorporation:**
+  
+  scCLEAN is a molecular approach that can be incorporated after or during the generation of single-cell sequencing libraries. Although the provided guide libraries are designed for 10x Genomics 3' single-cell platforms, the underlying principle is adaptable to a wide range of single-cell techniques.
 
-- **Single Cell RNA-seq:** 
-  scCLEAN was applied to the 10X version 3, 3' RNA-seq chromium single cell kit. This method could also be applied to other single cell platforms including plate based methods: Smart-seq, split-seq, parse bio, scale bio, cel-seq, droplet methods: PIP-seq, fluent, and microwell based methods: BD Rhapsody. 
+- **Single-Cell RNA-seq:**
+  
+  scCLEAN was developed and validated on the 10x Genomics Chromium 3' v3 platform. However, it can be applied to various single-cell RNA-seq methods, including:
+  - **Plate-based:** Smart-seq, Split-seq, sci-RNA-seq, Parse Bio, Scale Bio, Cel-Seq
+  - **Emulsion-based:** PIP-seq, Fluent
+  - **Droplet-based:** 10X, inDrops, Drop-seq
+  - **Microwell-based:** BD Rhapsody
+  
+  Each technology differs in sensitivity and library composition. scCLEAN’s benefits are most pronounced with methods that achieve higher sensitivity. For further reference, please see:  
+  [Systematic comparison of single-cell and single-nucleus RNA-sequencing methods](https://www.nature.com/articles/s41587-020-0465-8)
 
-  Every single cell method generates libraries with a fundamentally different level of sensitivity and composition. Please see the paper "Systematic comparison of single-cell and single-nucleus RNA-sequencing methods." scCLEAN will provide the greatest boost in performance for methods that have high sensitivity. See the schematics below. 
-  - https://www.nature.com/articles/s41587-020-0465-8
+  ![scCLEAN applied to different single cell methods](figures/single_cell_methods.png)
 
-  ![scCLEAN applied to a single cell method with low sensitivty and high noise](figures/Schematic_Library_Redistribution_Method1.png)
-  ![scCLEAN applied to a single cell method with high sensitivty and low noise](figures/Schematic_Library_Redistribution_Method2.png)
-
-- **Single Cell iso-seq:** 
-  scCLEAN was applied to Pac Bio Mas-seq protocol. 
+- **Single-Cell Iso-Seq:**
+  
+  scCLEAN has been successfully integrated into the PacBio MAS-Seq protocol for full-length isoform sequencing, improving the detection and characterization of low-abundance transcripts.
 
 - **Spatial Transcriptomics:**
-  scCLEAN has been successfully applied to Stereo-seq. Please see the following paper "STOmics-GenX: CRISPR based approach to improve cell identity specific gene detection from spatially resolved transcriptomics"
-  - https://www.biorxiv.org/content/10.1101/2022.12.08.519589v1
+  
+  scCLEAN is not limited to conventional scRNA-seq and can be adapted for spatially resolved methods like Stereo-seq. For an example, see:  
+  [STOmics-GenX: A CRISPR-based approach to improve cell identity-specific gene detection from spatially resolved transcriptomics](https://www.biorxiv.org/content/10.1101/2022.12.08.519589v1)
 
 - **Multi-omics:**
-  Future work could develop guide libraries targeting other modalities such as un-informative reads in ATAC-seq libraries. As the field continues to progress toward multi-omics, combining multiple modalities such as the genome, transcriptome, epigenome, and proteome from a single cell will only exacerbate the noise contributed by each technique. scCLEAN could be applied to help clean up the signal to noise. 
+  
+  As single-cell studies increasingly integrate multiple modalities (genome, transcriptome, epigenome, proteome), the need to mitigate noise grows. Future work could extend scCLEAN to other data types (e.g., ATAC-seq) to remove uninformative reads and maintain a high signal-to-noise ratio in multi-omic experiments.
 
 
 ## Repository Contents
