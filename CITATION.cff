@@ -1,2 +1,9 @@
+message: "If you use this software, please cite as below:"
+Title:
 A CRISPR/Cas9-based enhancement of high-throughput single-cell transcriptomics
-Amitabh C. Pandey, Jon Bezney, Dante DeAscanis, Ethan Kirsch, Farin Ahmed, Austin Crinklaw, Kumari Sonal Choudhary, Tony Mandala, Jeffrey Deason, Jasmin Hamdi, Azeem Siddique, Sridhar Ranganathan, Phillip Ordoukhanian, Keith Brown, Jon Armstrong, Steven Head, Eric J. Topol
+
+Authors:
+Amitabh C. Pandey, Jon Bezney, Dante DeAscanis, Ethan Kirsch, Farin Ahmed, Austin Crinklaw, Kumari Sonal Choudhary, Tony Mandala, Jeffrey Deason, Jasmin S. Hamdi, Azeem Siddique, Sridhar Ranganathan,  Keith Brown, Jon Armstrong, Steven Head, Phillip Ordoukhanian, Lars M. Steinmetz, Eric J. Topol
+
+version: v1.0.1
+date-released: 2024-12-19
